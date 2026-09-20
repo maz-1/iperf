@@ -131,7 +131,7 @@ iperf_tcp_accept(struct iperf_test * test)
     struct sockaddr_storage addr;
 
     len = sizeof(addr);
-    if ((s = accept(test->listener, (struct sockaddr *) &addr, &len)) < 0) {
+    if ((s = IPERF_SYS_ACCEPT(test->listener, (struct sockaddr *) &addr, &len)) < 0) {
         i_errno = IESTREAMCONNECT;
         return -1;
     }
@@ -324,7 +324,7 @@ iperf_tcp_listen(struct iperf_test *test)
 
         freeaddrinfo(res);
 
-        if (listen(s, INT_MAX) < 0) {
+        if (IPERF_SYS_LISTEN(s, INT_MAX) < 0) {
             i_errno = IESTREAMLISTEN;
             close(s);
             return -1;

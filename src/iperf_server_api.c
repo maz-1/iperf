@@ -159,7 +159,7 @@ iperf_accept(struct iperf_test *test)
     struct sockaddr_storage addr;
 
     len = sizeof(addr);
-    if ((s = accept(test->listener, (struct sockaddr *) &addr, &len)) < 0) {
+    if ((s = IPERF_SYS_ACCEPT(test->listener, (struct sockaddr *) &addr, &len)) < 0) {
         i_errno = IEACCEPT;
         return ret;
     }

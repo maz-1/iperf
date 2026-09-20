@@ -66,6 +66,10 @@ None.
 
 (Note: If configure fails, try running `./bootstrap.sh` first)
 
+### Experimental native Windows static port ###
+
+This branch also contains an experimental native Win64 static port that does not require Cygwin or MSYS runtime DLLs. See `WINDOWS_STATIC_PORT.md` and `build-windows-static.ps1`.
+
 Invoking iperf3
 ---------------
 

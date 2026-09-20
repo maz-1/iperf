@@ -5008,6 +5008,25 @@ iperf_new_stream(struct iperf_test *test, int s, int sender)
     TAILQ_INIT(&sp->result->interval_results);
 
     /* Create and randomize the buffer */
+    size = test->settings->blksize;
+    if (test->protocol->id == Pudp && test->settings->gso && (size < test->settings->gso_bf_size))
+        size = test->settings->gso_bf_size;
+    if (test->protocol->id == Pudp && test->settings->gro && (size < test->settings->gro_bf_size))
+        size = test->settings->gro_bf_size;
+    if (sp->test->debug)
+        printf("Buffer %d bytes\n", size);
+
+#if defined(_WIN32)
+    /* Windows cannot unlink an open mkstemp file like Unix can. The Win32
+     * compatibility mmap is anonymous heap-backed memory, so no backing file
+     * is needed for the normal TCP/UDP data path. */
+    sp->buffer_fd = -1;
+    sp->buffer = (char *) mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_SHARED, -1, 0);
+    if (sp->buffer == MAP_FAILED) {
+        i_errno = IECREATESTREAM;
+        goto err_exit_free_result;
+    }
+#else
     sp->buffer_fd = mkstemp(template);
     if (sp->buffer_fd == -1) {
         i_errno = IECREATESTREAM;
@@ -5017,13 +5036,6 @@ iperf_new_stream(struct iperf_test *test, int s, int sender)
         i_errno = IECREATESTREAM;
         goto err_exit_close_buffer;
     }
-    size = test->settings->blksize;
-    if (test->protocol->id == Pudp && test->settings->gso && (size < test->settings->gso_bf_size))
-        size = test->settings->gso_bf_size;
-    if (test->protocol->id == Pudp && test->settings->gro && (size < test->settings->gro_bf_size))
-        size = test->settings->gro_bf_size;
-    if (sp->test->debug)
-        printf("Buffer %d bytes\n", size);
     if (ftruncate(sp->buffer_fd, size) < 0) {
         i_errno = IECREATESTREAM;
         goto err_exit_close_buffer;
@@ -5033,6 +5045,8 @@ iperf_new_stream(struct iperf_test *test, int s, int sender)
         i_errno = IECREATESTREAM;
         goto err_exit_close_buffer;
     }
+#endif
+
     sp->pending_size = 0;
 
     /* Set socket */
@@ -5074,8 +5088,11 @@ err_exit_close_diskfile:
     }
 err_exit_munmap_buffer:
     munmap(sp->buffer, sp->test->settings->blksize);
+#if !defined(_WIN32)
 err_exit_close_buffer:
-    close(sp->buffer_fd);
+#endif
+    if (sp->buffer_fd >= 0)
+        close(sp->buffer_fd);
 err_exit_free_result:
     free(sp->result);
 err_exit_free_sp:

@@ -31,3 +31,8 @@ examples/Makefile
 examples/mic
 examples/mis
 .vscode/
+
+# Native Windows static-port build artifacts
+.toolchain/
+.tmp/
+src/iperf3.exe

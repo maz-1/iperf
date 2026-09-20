@@ -57,6 +57,14 @@
  */
 int readentropy(void *out, size_t outsize)
 {
+#if defined(_WIN32)
+    if (!outsize)
+        return 0;
+    if (iperf_win_random(out, outsize) != 0) {
+        iperf_errexit(NULL, "error - failed to obtain Windows system random data: %s\n", strerror(errno));
+    }
+    return 0;
+#else
     FILE *frandom;
     static const char rndfile[] = "/dev/urandom";
     int is_eof = 0;
@@ -78,7 +86,9 @@ int readentropy(void *out, size_t outsize)
     }
     fclose(frandom);
     return 0;
+#endif
 }
+
 
 
 /*
@@ -503,6 +513,15 @@ iperf_dump_fdset(FILE *fp, const char *str, int nfds, fd_set *fds)
  * Cobbled together from various daemon(3) implementations,
  * not intended to be general-purpose. */
 #ifndef HAVE_DAEMON
+#if defined(_WIN32)
+int daemon(int nochdir, int noclose)
+{
+    (void)nochdir;
+    (void)noclose;
+    errno = ENOSYS;
+    return -1;
+}
+#else
 int daemon(int nochdir, int noclose)
 {
     pid_t pid = 0;
@@ -559,6 +578,7 @@ int daemon(int nochdir, int noclose)
     }
     return (0);
 }
+#endif /* _WIN32 */
 #endif /* HAVE_DAEMON */
 
 /* Compatibility version of getline(3) for systems that don't have it.. */

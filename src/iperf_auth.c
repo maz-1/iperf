@@ -36,6 +36,7 @@
 #include <termios.h>
 #include <inttypes.h>
 #include <stdint.h>
+#include "iperf_util.h"
 
 #if defined(HAVE_SSL)
 

@@ -29,6 +29,21 @@
 
 #include "iperf_config.h"
 
+#if defined(_WIN32)
+#include "win32/include/iperf_win32.h"
+#define IPERF_SYS_CONNECT iperf_win_connect
+#define IPERF_SYS_LISTEN iperf_win_listen
+#define IPERF_SYS_ACCEPT iperf_win_accept
+#define IPERF_SOCKET_READ(fd, buf, count) recv((fd), (buf), (count), 0)
+#define IPERF_SOCKET_WRITE(fd, buf, count) send((fd), (buf), (count), 0)
+#else
+#define IPERF_SYS_CONNECT connect
+#define IPERF_SYS_LISTEN listen
+#define IPERF_SYS_ACCEPT accept
+#define IPERF_SOCKET_READ(fd, buf, count) read((fd), (buf), (count))
+#define IPERF_SOCKET_WRITE(fd, buf, count) write((fd), (buf), (count))
+#endif
+
 #include <sys/time.h>
 #include <sys/types.h>
 #include <stdint.h>
@@ -409,9 +424,9 @@ struct iperf_test
     int          bitrate_limit_exceeded;                  /* Set by callback routine when average data rate exceeded the server's bitrate limit */
 
     int server_last_run_rc;                      /* Save last server run rc for next test */
-    uint server_forced_idle_restarts_count;      /* count number of forced server restarts to make sure it is not stack */
-    uint server_forced_no_msg_restarts_count;    /* count number of forced server restarts to make sure it is not stack */
-    uint server_test_number;                     /* count number of tests performed by a server */
+    unsigned int server_forced_idle_restarts_count;      /* count number of forced server restarts to make sure it is not stack */
+    unsigned int server_forced_no_msg_restarts_count;    /* count number of forced server restarts to make sure it is not stack */
+    unsigned int server_test_number;                     /* count number of tests performed by a server */
 
     char      cookie[COOKIE_SIZE];
 //    struct iperf_stream *streams;               /* pointer to list of struct stream */

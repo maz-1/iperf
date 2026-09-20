@@ -90,40 +90,94 @@ int
 timeout_connect(int s, const struct sockaddr *name, socklen_t namelen,
     int timeout)
 {
-	struct pollfd pfd;
-	socklen_t optlen;
-	int flags, optval;
-	int ret;
+#if defined(_WIN32)
+    SOCKET sock = (SOCKET)(uintptr_t)(unsigned int)s;
+    u_long mode = 0;
+    int optval = 0;
+    int optlen = sizeof(optval);
+    int ret;
 
-	flags = 0;
-	if (timeout != -1) {
-		flags = fcntl(s, F_GETFL, 0);
-		if (fcntl(s, F_SETFL, flags | O_NONBLOCK) == -1)
-			return -1;
-	}
+    if (timeout != -1) {
+        mode = 1;
+        if (ioctlsocket(sock, FIONBIO, &mode) == SOCKET_ERROR) {
+            iperf_win32_set_errno_from_wsa(WSAGetLastError());
+            return -1;
+        }
+    }
 
-	if ((ret = connect(s, name, namelen)) != 0 && errno == EINPROGRESS) {
-		pfd.fd = s;
-		pfd.events = POLLOUT;
-		if ((ret = poll(&pfd, 1, timeout)) == 1) {
-			optlen = sizeof(optval);
-			if ((ret = getsockopt(s, SOL_SOCKET, SO_ERROR,
-			    &optval, &optlen)) == 0) {
-				errno = optval;
-				ret = optval == 0 ? 0 : -1;
-			}
-		} else if (ret == 0) {
-			errno = ETIMEDOUT;
-			ret = -1;
-		} else
-			ret = -1;
-	}
+    ret = IPERF_SYS_CONNECT(s, name, namelen);
+    if (ret != 0 && (errno == EINPROGRESS || errno == EWOULDBLOCK || errno == EALREADY)) {
+        fd_set wfds;
+        struct timeval tv;
+        FD_ZERO(&wfds);
+        FD_SET(sock, &wfds);
+        tv.tv_sec = timeout / 1000;
+        tv.tv_usec = (timeout % 1000) * 1000;
+        ret = select(0, NULL, &wfds, NULL, &tv);
+        if (ret == 1) {
+            if (getsockopt(s, SOL_SOCKET, SO_ERROR, &optval, &optlen) == 0) {
+                if (optval == 0) {
+                    ret = 0;
+                } else {
+                    iperf_win32_set_errno_from_wsa(optval);
+                    ret = -1;
+                }
+            } else {
+                ret = -1;
+            }
+        } else if (ret == 0) {
+            errno = ETIMEDOUT;
+            ret = -1;
+        } else {
+            ret = -1;
+        }
+    }
 
-	if (timeout != -1 && fcntl(s, F_SETFL, flags) == -1)
-		ret = -1;
+    if (timeout != -1) {
+        mode = 0;
+        if (ioctlsocket(sock, FIONBIO, &mode) == SOCKET_ERROR) {
+            iperf_win32_set_errno_from_wsa(WSAGetLastError());
+            ret = -1;
+        }
+    }
+    return ret;
+#else
+    struct pollfd pfd;
+    socklen_t optlen;
+    int flags, optval;
+    int ret;
 
-	return (ret);
+    flags = 0;
+    if (timeout != -1) {
+        flags = fcntl(s, F_GETFL, 0);
+        if (fcntl(s, F_SETFL, flags | O_NONBLOCK) == -1)
+            return -1;
+    }
+
+    if ((ret = IPERF_SYS_CONNECT(s, name, namelen)) != 0 && errno == EINPROGRESS) {
+        pfd.fd = s;
+        pfd.events = POLLOUT;
+        if ((ret = poll(&pfd, 1, timeout)) == 1) {
+            optlen = sizeof(optval);
+            if ((ret = getsockopt(s, SOL_SOCKET, SO_ERROR,
+                &optval, &optlen)) == 0) {
+                errno = optval;
+                ret = optval == 0 ? 0 : -1;
+            }
+        } else if (ret == 0) {
+            errno = ETIMEDOUT;
+            ret = -1;
+        } else
+            ret = -1;
+    }
+
+    if (timeout != -1 && fcntl(s, F_SETFL, flags) == -1)
+        ret = -1;
+
+    return ret;
+#endif
 }
+
 
 /* netdial and netannounce code comes from libtask: http://swtch.com/libtask/
  * Copyright: http://swtch.com/libtask/COPYRIGHT
@@ -386,7 +440,7 @@ netannounce(int domain, int proto, const char *local, const char *bind_dev, int 
     freeaddrinfo(res);
 
     if (proto == SOCK_STREAM) {
-        if (listen(s, INT_MAX) < 0) {
+        if (IPERF_SYS_LISTEN(s, INT_MAX) < 0) {
 	    saved_errno = errno;
 	    close(s);
 	    errno = saved_errno;
@@ -444,10 +498,14 @@ Nrecv(int fd, char *buf, size_t count, int prot, int sock_opt)
     }
 
     while (nleft > 0) {
+#if defined(_WIN32)
+        r = recv(fd, buf, nleft, sock_opt);
+#else
         if (sock_opt)
             r = recv(fd, buf, nleft, sock_opt);
         else
             r = read(fd, buf, nleft);
+#endif
 
         if (r < 0) {
             /* XXX EWOULDBLOCK can't happen without non-blocking sockets */
@@ -523,10 +581,14 @@ Nrecv_no_select(int fd, char *buf, size_t count, int prot, int sock_opt)
     register size_t nleft = count;
 
     while (nleft > 0) {
+#if defined(_WIN32)
+        r = recv(fd, buf, nleft, sock_opt);
+#else
         if (sock_opt)
             r = recv(fd, buf, nleft, sock_opt);
         else
             r = read(fd, buf, nleft);
+#endif
 
         if (r < 0) {
             /* XXX EWOULDBLOCK can't happen without non-blocking sockets */
@@ -652,7 +714,11 @@ Nwrite(int fd, const char *buf, size_t count, int prot)
     register size_t nleft = count;
 
     while (nleft > 0) {
-	r = write(fd, buf, nleft);
+#if defined(_WIN32)
+        r = send(fd, buf, nleft, 0);
+#else
+        r = write(fd, buf, nleft);
+#endif
 	if (r < 0) {
 	    switch (errno) {
 		case EINTR:
@@ -837,6 +903,15 @@ Nsendfile(int fromfd, int tofd, const char *buf, size_t count)
 int
 setnonblocking(int fd, int nonblocking)
 {
+#if defined(_WIN32)
+    SOCKET sock = (SOCKET)(uintptr_t)(unsigned int)fd;
+    u_long mode = nonblocking ? 1UL : 0UL;
+    if (ioctlsocket(sock, FIONBIO, &mode) == SOCKET_ERROR) {
+        iperf_win32_set_errno_from_wsa(WSAGetLastError());
+        return -1;
+    }
+    return 0;
+#else
     int flags, newflags;
 
     flags = fcntl(fd, F_GETFL, 0);
@@ -845,16 +920,18 @@ setnonblocking(int fd, int nonblocking)
         return -1;
     }
     if (nonblocking)
-	newflags = flags | (int) O_NONBLOCK;
+        newflags = flags | (int) O_NONBLOCK;
     else
-	newflags = flags & ~((int) O_NONBLOCK);
+        newflags = flags & ~((int) O_NONBLOCK);
     if (newflags != flags)
-	if (fcntl(fd, F_SETFL, newflags) < 0) {
-	    perror("fcntl(F_SETFL)");
-	    return -1;
-	}
+        if (fcntl(fd, F_SETFL, newflags) < 0) {
+            perror("fcntl(F_SETFL)");
+            return -1;
+        }
     return 0;
+#endif
 }
+
 
 /****************************************************************************/
 
