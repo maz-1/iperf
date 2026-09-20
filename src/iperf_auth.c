@@ -26,6 +26,9 @@
  */
 
 #include "iperf_config.h"
+#if defined(_WIN32)
+#include "win32/include/iperf_win32.h"
+#endif
 
 #include <string.h>
 #include <time.h>

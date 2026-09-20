@@ -445,3 +445,28 @@ int iperf_win_random(void *buffer, size_t length)
     return 0;
 }
 
+
+char *iperf_win_strndup(const char *src, size_t maxlen)
+{
+    size_t len = 0;
+    char *copy;
+
+    if (!src) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    while (len < maxlen && src[len] != '\0')
+        ++len;
+
+    copy = (char *)malloc(len + 1);
+    if (!copy) {
+        errno = ENOMEM;
+        return NULL;
+    }
+
+    memcpy(copy, src, len);
+    copy[len] = '\0';
+    return copy;
+}
+

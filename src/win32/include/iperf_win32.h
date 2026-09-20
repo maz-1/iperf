@@ -22,6 +22,7 @@ void iperf_win32_cleanup(void);
 int iperf_win_close(int fd);
 void iperf_win32_set_errno_from_wsa(int wsa_error);
 int iperf_win_random(void *buffer, size_t length);
+char *iperf_win_strndup(const char *src, size_t maxlen);
 int iperf_win_socket(int af, int type, int protocol);
 int iperf_win_connect(int s, const struct sockaddr *name, int namelen);
 int iperf_win_bind(int s, const struct sockaddr *name, int namelen);
@@ -47,6 +48,7 @@ int kill(int pid, int sig);
 
 #ifndef IPERF_WIN32_COMPAT_IMPL
 #define close iperf_win_close
+#define strndup iperf_win_strndup
 #define socket(af, type, protocol) iperf_win_socket((af), (type), (protocol))
 #define bind(s, name, namelen) iperf_win_bind((int)(s), (name), (int)(namelen))
 #define recv(s, buf, len, flags) iperf_win_recv((int)(s), (buf), (int)(len), (flags))
