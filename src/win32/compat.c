@@ -10,6 +10,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <wchar.h>
 
 static int g_wsa_started = 0;
 
@@ -468,5 +469,133 @@ char *iperf_win_strndup(const char *src, size_t maxlen)
     memcpy(copy, src, len);
     copy[len] = '\0';
     return copy;
+}
+
+
+static void iperf_win32_set_errno_from_win32(DWORD error)
+{
+    switch (error) {
+    case ERROR_FILE_NOT_FOUND:
+    case ERROR_PATH_NOT_FOUND:
+        errno = ENOENT;
+        break;
+    case ERROR_ACCESS_DENIED:
+        errno = EACCES;
+        break;
+    case ERROR_NOT_ENOUGH_MEMORY:
+    case ERROR_OUTOFMEMORY:
+        errno = ENOMEM;
+        break;
+    case ERROR_INVALID_PARAMETER:
+        errno = EINVAL;
+        break;
+    default:
+        errno = EIO;
+        break;
+    }
+}
+
+int iperf_win_daemon(int nochdir, int noclose)
+{
+    static const wchar_t daemon_marker[] = L"IPERF3_WIN32_DAEMON_CHILD";
+    wchar_t marker_value[2];
+    wchar_t exe_path[32768];
+    const wchar_t *original_command_line;
+    wchar_t *command_line = NULL;
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    DWORD marker_len;
+    DWORD exe_len;
+    DWORD creation_flags;
+    DWORD error = ERROR_SUCCESS;
+    SIZE_T command_line_bytes;
+    BOOL created;
+
+    marker_len = GetEnvironmentVariableW(daemon_marker, marker_value,
+                                         (DWORD)(sizeof(marker_value) / sizeof(marker_value[0])));
+    if (marker_len > 0) {
+        /* The detached child re-enters daemon() because it has the same -D
+         * command line. Consume the marker exactly once and continue running
+         * as the daemon process instead of spawning recursively. */
+        SetEnvironmentVariableW(daemon_marker, NULL);
+
+        if (!noclose) {
+            if (freopen("NUL", "r", stdin) == NULL ||
+                freopen("NUL", "w", stdout) == NULL ||
+                freopen("NUL", "w", stderr) == NULL) {
+                errno = EIO;
+                return -1;
+            }
+        }
+        return 0;
+    }
+
+    exe_len = GetModuleFileNameW(NULL, exe_path,
+                                 (DWORD)(sizeof(exe_path) / sizeof(exe_path[0])));
+    if (exe_len == 0 || exe_len >= (DWORD)(sizeof(exe_path) / sizeof(exe_path[0]) - 1)) {
+        iperf_win32_set_errno_from_win32(GetLastError());
+        return -1;
+    }
+
+    original_command_line = GetCommandLineW();
+    if (!original_command_line) {
+        errno = EIO;
+        return -1;
+    }
+
+    command_line_bytes = (wcslen(original_command_line) + 1) * sizeof(wchar_t);
+    command_line = (wchar_t *)HeapAlloc(GetProcessHeap(), 0, command_line_bytes);
+    if (!command_line) {
+        errno = ENOMEM;
+        return -1;
+    }
+    memcpy(command_line, original_command_line, command_line_bytes);
+
+    memset(&si, 0, sizeof(si));
+    memset(&pi, 0, sizeof(pi));
+    si.cb = sizeof(si);
+
+    if (!SetEnvironmentVariableW(daemon_marker, L"1")) {
+        error = GetLastError();
+        goto fail;
+    }
+
+    /* Do not inherit any parent handles. This is critical when iperf3 is
+     * launched from shells or automation hosts that use inheritable pipes;
+     * otherwise the detached child can keep those pipes open indefinitely. */
+    creation_flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
+    created = CreateProcessW(exe_path,
+                             command_line,
+                             NULL,
+                             NULL,
+                             FALSE,
+                             creation_flags,
+                             NULL,
+                             nochdir ? NULL : L"\\",
+                             &si,
+                             &pi);
+    if (!created)
+        error = GetLastError();
+
+    SetEnvironmentVariableW(daemon_marker, NULL);
+
+    if (!created)
+        goto fail;
+
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    HeapFree(GetProcessHeap(), 0, command_line);
+
+    /* Equivalent to the parent side of daemon(3): only the detached child
+     * continues past daemon(). */
+    ExitProcess(0);
+    return 0;
+
+fail:
+    SetEnvironmentVariableW(daemon_marker, NULL);
+    if (command_line)
+        HeapFree(GetProcessHeap(), 0, command_line);
+    iperf_win32_set_errno_from_win32(error);
+    return -1;
 }
 

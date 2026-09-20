@@ -516,10 +516,7 @@ iperf_dump_fdset(FILE *fp, const char *str, int nfds, fd_set *fds)
 #if defined(_WIN32)
 int daemon(int nochdir, int noclose)
 {
-    (void)nochdir;
-    (void)noclose;
-    errno = ENOSYS;
-    return -1;
+    return iperf_win_daemon(nochdir, noclose);
 }
 #else
 int daemon(int nochdir, int noclose)

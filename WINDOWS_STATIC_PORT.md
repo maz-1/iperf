@@ -59,6 +59,8 @@ Validated on Windows 11 using two instances of the native executable on loopback
 - Parallel TCP streams (`-P 4`)
 - JSON output (`-J`)
 - One-shot server (`-1`)
+- Native Windows daemon mode (`-D` / `--daemon`)
+- Daemon pidfile lifecycle (`--pidfile`)
 - RSA/OpenSSL authentication with a valid username/password
 - Authentication rejection with an invalid password
 
@@ -71,6 +73,7 @@ Representative local tests during development:
 | TCP, 4 streams, 2 s | ~30.7 Gbit/s aggregate |
 | UDP, 200 Mbit/s, 2 s | 200 Mbit/s, 0% loss |
 | JSON TCP, 1 s | valid JSON, exit code 0 |
+| Daemon + one-off TCP, 1 s | background listener, ~8.31 Gbit/s, automatic exit and pidfile cleanup |
 | Authenticated TCP, 1 s | ~6.05 Gbit/s, client/server exit code 0 |
 | Wrong authentication password | rejected; client exit code 1 |
 
@@ -116,11 +119,28 @@ The port keeps the upstream iperf3 protocol/state-machine implementation and add
 - Windows system random data
 - anonymous stream buffers without the Unix `mkstemp` + unlink-while-open behavior
 - `strndup` compatibility needed by the authentication implementation
+- native Windows daemonization using a detached child process with no inherited parent handles
+
+## Daemon mode
+
+Native Windows daemon mode is supported with the upstream `-D` / `--daemon` option.
+
+```powershell
+.\src\iperf3.exe -s -D -p 5201 `
+  --pidfile=.\iperf3.pid `
+  --logfile=.\iperf3.log `
+  --forceflush
+```
+
+The launcher process creates a detached child running the same command line, then exits. An internal one-shot environment marker prevents the child from recursively daemonizing itself. The daemon child keeps the original working directory (matching upstream `daemon(1, 0)` usage), reopens standard input/output/error to `NUL`, creates the requested pidfile using its own PID, and then enters the normal upstream server loop.
+
+A `-D -1` test was also validated: the daemon accepted one client test, exited automatically, and removed its pidfile.
+
+Ordinary Windows PowerShell was verified to continue immediately after launching `iperf3.exe -D` while the detached server remained alive and listening.
 
 ## Current limitations
 
 - SCTP is disabled.
-- Unix daemon mode is not implemented on native Windows; run the server in the foreground or manage it as a Windows process/service externally.
 - Zero-copy/sendfile is not available in this port.
 - The OpenSSL command-line application is not shipped; only the static libraries required by iperf3 authentication are built into `iperf3.exe`.
 - The port still inherits upstream's use of `int` for socket identifiers. It is validated for normal iperf3 workloads but has not been hardened for unusually large Windows handle values or extremely high process handle counts.

@@ -23,6 +23,7 @@ int iperf_win_close(int fd);
 void iperf_win32_set_errno_from_wsa(int wsa_error);
 int iperf_win_random(void *buffer, size_t length);
 char *iperf_win_strndup(const char *src, size_t maxlen);
+int iperf_win_daemon(int nochdir, int noclose);
 int iperf_win_socket(int af, int type, int protocol);
 int iperf_win_connect(int s, const struct sockaddr *name, int namelen);
 int iperf_win_bind(int s, const struct sockaddr *name, int namelen);
