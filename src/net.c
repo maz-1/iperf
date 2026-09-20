@@ -823,7 +823,9 @@ Nwrite_gso(int fd, const char *buf, size_t count, int prot, uint16_t gso_size)
 int
 has_sendfile(void)
 {
-#if defined(HAVE_SENDFILE)
+#if defined(_WIN32)
+    return iperf_win_has_transmitfile();
+#elif defined(HAVE_SENDFILE)
     return 1;
 #else /* HAVE_SENDFILE */
     return 0;
@@ -839,7 +841,27 @@ has_sendfile(void)
 int
 Nsendfile(int fromfd, int tofd, const char *buf, size_t count)
 {
-#if defined(HAVE_SENDFILE)
+#if defined(_WIN32)
+    int r;
+    (void)buf;
+
+    r = iperf_win_transmitfile(fromfd, tofd, count);
+    if (r >= 0)
+        return r;
+
+    switch (errno) {
+    case EINTR:
+    case EAGAIN:
+#if (EAGAIN != EWOULDBLOCK)
+    case EWOULDBLOCK:
+#endif
+    case ENOBUFS:
+    case ENOMEM:
+        return NET_SOFTERROR;
+    default:
+        return NET_HARDERROR;
+    }
+#elif defined(HAVE_SENDFILE)
     off_t offset;
 #if defined(__FreeBSD__) || (defined(__APPLE__) && defined(__MACH__) && defined(MAC_OS_X_VERSION_10_6))
     off_t sent;

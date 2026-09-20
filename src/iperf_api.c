@@ -5017,14 +5017,21 @@ iperf_new_stream(struct iperf_test *test, int s, int sender)
         printf("Buffer %d bytes\n", size);
 
 #if defined(_WIN32)
-    /* Windows cannot unlink an open mkstemp file like Unix can. The Win32
-     * compatibility mmap is anonymous heap-backed memory, so no backing file
-     * is needed for the normal TCP/UDP data path. */
+    /* The regular Windows data path uses anonymous heap-backed memory. For
+     * TCP zerocopy senders, keep the same memory buffer for payload setup and
+     * additionally create a delete-on-close temporary file for TransmitFile. */
     sp->buffer_fd = -1;
     sp->buffer = (char *) mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_SHARED, -1, 0);
     if (sp->buffer == MAP_FAILED) {
         i_errno = IECREATESTREAM;
         goto err_exit_free_result;
+    }
+    if (test->zerocopy && sender && test->protocol->id == Ptcp) {
+        sp->buffer_fd = iperf_win_create_zerocopy_file();
+        if (sp->buffer_fd < 0) {
+            i_errno = IECREATESTREAM;
+            goto err_exit_munmap_buffer;
+        }
     }
 #else
     sp->buffer_fd = mkstemp(template);
@@ -5073,6 +5080,14 @@ iperf_new_stream(struct iperf_test *test, int s, int sender)
         fill_with_repeating_pattern(sp->buffer, test->settings->blksize);
     else
         ret = readentropy(sp->buffer, test->settings->blksize);
+
+#if defined(_WIN32)
+    if (ret >= 0 && sp->buffer_fd >= 0 &&
+        iperf_win_prepare_zerocopy_file(sp->buffer_fd, sp->buffer, test->settings->blksize) < 0) {
+        i_errno = IECREATESTREAM;
+        goto err_exit_close_diskfile;
+    }
+#endif
 
     if ((ret < 0) || (iperf_init_stream(sp, test) < 0)) {
         goto err_exit_close_diskfile;

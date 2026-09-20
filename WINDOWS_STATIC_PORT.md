@@ -61,6 +61,8 @@ Validated on Windows 11 using two instances of the native executable on loopback
 - One-shot server (`-1`)
 - Native Windows daemon mode (`-D` / `--daemon`)
 - Daemon pidfile lifecycle (`--pidfile`)
+- Windows `TransmitFile` zerocopy (`-Z` / `--zerocopy`)
+- Zerocopy reverse mode and parallel streams
 - RSA/OpenSSL authentication with a valid username/password
 - Authentication rejection with an invalid password
 
@@ -74,12 +76,15 @@ Representative local tests during development:
 | UDP, 200 Mbit/s, 2 s | 200 Mbit/s, 0% loss |
 | JSON TCP, 1 s | valid JSON, exit code 0 |
 | Daemon + one-off TCP, 1 s | background listener, ~8.31 Gbit/s, automatic exit and pidfile cleanup |
+| Windows zerocopy TCP (`-Z`), 2 s | ~7.30 Gbit/s, TransmitFile backing file observed and auto-deleted |
+| Windows reverse zerocopy (`-R -Z`), 2 s | ~8.02 Gbit/s |
+| Windows zerocopy, 4 streams (`-Z -P 4`), 2 s | ~15.3 Gbit/s aggregate; four backing files observed |
 | Authenticated TCP, 1 s | ~6.05 Gbit/s, client/server exit code 0 |
 | Wrong authentication password | rejected; client exit code 1 |
 
 These loopback numbers validate the data paths; they are not intended as hardware performance benchmarks.
 
-`iperf3.exe --version` reports `authentication` in the optional feature list when the OpenSSL-enabled build is active.
+`iperf3.exe --version` reports both `sendfile / zerocopy` and `authentication` in the optional feature list when the Windows static build is active.
 
 ## Authentication usage
 
@@ -120,6 +125,28 @@ The port keeps the upstream iperf3 protocol/state-machine implementation and add
 - anonymous stream buffers without the Unix `mkstemp` + unlink-while-open behavior
 - `strndup` compatibility needed by the authentication implementation
 - native Windows daemonization using a detached child process with no inherited parent handles
+- Winsock `TransmitFile` zerocopy with delete-on-close temporary backing files
+
+## Zerocopy mode
+
+Native Windows zerocopy is supported through Winsock `TransmitFile` and the upstream `-Z` / `--zerocopy` option.
+
+```powershell
+# Normal sender zerocopy
+.\src\iperf3.exe -c 192.168.1.10 -Z
+
+# Reverse mode: server is the zerocopy sender
+.\src\iperf3.exe -c 192.168.1.10 -R -Z
+
+# Parallel zerocopy streams
+.\src\iperf3.exe -c 192.168.1.10 -Z -P 4
+```
+
+The Win32 compatibility layer obtains `TransmitFile` dynamically through `WSAIoctl(SIO_GET_EXTENSION_FUNCTION_POINTER, WSAID_TRANSMITFILE)`, so no additional Winsock extension DLL is added to the static import table.
+
+For each local TCP sender using zerocopy, iperf3 creates a temporary backing file with `FILE_ATTRIBUTE_TEMPORARY`, `FILE_FLAG_DELETE_ON_CLOSE`, and `FILE_FLAG_SEQUENTIAL_SCAN`. The randomized or repeating iperf payload is written to this file once when the stream is created. `Nsendfile()` then resets the file offset and calls `TransmitFile()` for each block instead of using `send()`/`write()`.
+
+The regular non-zerocopy TCP/UDP path continues to use the anonymous heap-backed stream buffer and does not create a temporary file. Zerocopy backing files are automatically deleted when the stream closes.
 
 ## Daemon mode
 
@@ -141,7 +168,6 @@ Ordinary Windows PowerShell was verified to continue immediately after launching
 ## Current limitations
 
 - SCTP is disabled.
-- Zero-copy/sendfile is not available in this port.
 - The OpenSSL command-line application is not shipped; only the static libraries required by iperf3 authentication are built into `iperf3.exe`.
 - The port still inherits upstream's use of `int` for socket identifiers. It is validated for normal iperf3 workloads but has not been hardened for unusually large Windows handle values or extremely high process handle counts.
 - The platform-information string currently uses a compatibility Windows version query and can report a legacy Windows version number; this does not affect measurements.

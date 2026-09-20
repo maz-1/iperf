@@ -11,6 +11,8 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <wchar.h>
+#include <mswsock.h>
+#include <limits.h>
 
 static int g_wsa_started = 0;
 
@@ -597,5 +599,174 @@ fail:
         HeapFree(GetProcessHeap(), 0, command_line);
     iperf_win32_set_errno_from_win32(error);
     return -1;
+}
+
+
+static LPFN_TRANSMITFILE g_transmit_file = NULL;
+
+static int iperf_win_resolve_transmitfile(SOCKET s)
+{
+    GUID guid = WSAID_TRANSMITFILE;
+    DWORD bytes = 0;
+    LPFN_TRANSMITFILE fn = NULL;
+
+    if (g_transmit_file != NULL)
+        return 0;
+
+    if (WSAIoctl(s,
+                 SIO_GET_EXTENSION_FUNCTION_POINTER,
+                 &guid,
+                 (DWORD)sizeof(guid),
+                 &fn,
+                 (DWORD)sizeof(fn),
+                 &bytes,
+                 NULL,
+                 NULL) == SOCKET_ERROR) {
+        iperf_win32_set_errno_from_wsa(WSAGetLastError());
+        return -1;
+    }
+
+    g_transmit_file = fn;
+    return 0;
+}
+
+int iperf_win_has_transmitfile(void)
+{
+    SOCKET s;
+    int rc;
+
+    if (g_transmit_file != NULL)
+        return 1;
+
+    s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == INVALID_SOCKET)
+        return 0;
+
+    rc = iperf_win_resolve_transmitfile(s);
+    closesocket(s);
+    return rc == 0;
+}
+
+int iperf_win_create_zerocopy_file(void)
+{
+    wchar_t temp_path[MAX_PATH + 1];
+    wchar_t temp_name[MAX_PATH + 1];
+    DWORD path_len;
+    HANDLE handle;
+    int fd;
+
+    path_len = GetTempPathW((DWORD)(sizeof(temp_path) / sizeof(temp_path[0])), temp_path);
+    if (path_len == 0 || path_len >= (DWORD)(sizeof(temp_path) / sizeof(temp_path[0]))) {
+        iperf_win32_set_errno_from_win32(GetLastError());
+        return -1;
+    }
+
+    if (GetTempFileNameW(temp_path, L"ipf", 0, temp_name) == 0) {
+        iperf_win32_set_errno_from_win32(GetLastError());
+        return -1;
+    }
+
+    handle = CreateFileW(temp_name,
+                         GENERIC_READ | GENERIC_WRITE | DELETE,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         NULL,
+                         OPEN_EXISTING,
+                         FILE_ATTRIBUTE_TEMPORARY |
+                         FILE_FLAG_DELETE_ON_CLOSE |
+                         FILE_FLAG_SEQUENTIAL_SCAN,
+                         NULL);
+    if (handle == INVALID_HANDLE_VALUE) {
+        DWORD error = GetLastError();
+        DeleteFileW(temp_name);
+        iperf_win32_set_errno_from_win32(error);
+        return -1;
+    }
+
+    fd = _open_osfhandle((intptr_t)handle, _O_RDWR | _O_BINARY | _O_NOINHERIT);
+    if (fd < 0) {
+        CloseHandle(handle);
+        return -1;
+    }
+
+    return fd;
+}
+
+int iperf_win_prepare_zerocopy_file(int fd, const void *buffer, size_t length)
+{
+    const unsigned char *cursor = (const unsigned char *)buffer;
+    size_t remaining = length;
+
+    if (fd < 0 || (buffer == NULL && length != 0)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (_lseeki64(fd, 0, SEEK_SET) < 0)
+        return -1;
+
+    while (remaining > 0) {
+        unsigned int chunk = remaining > (size_t)INT_MAX ? (unsigned int)INT_MAX : (unsigned int)remaining;
+        int written = _write(fd, cursor, chunk);
+        if (written < 0)
+            return -1;
+        if (written == 0) {
+            errno = EIO;
+            return -1;
+        }
+        cursor += written;
+        remaining -= (size_t)written;
+    }
+
+    if (_commit(fd) != 0)
+        return -1;
+
+    if (_lseeki64(fd, 0, SEEK_SET) < 0)
+        return -1;
+
+    return 0;
+}
+
+int iperf_win_transmitfile(int file_fd, int socket_fd, size_t count)
+{
+    SOCKET s = (SOCKET)(uintptr_t)(unsigned int)socket_fd;
+    intptr_t os_handle;
+    HANDLE file_handle;
+    LARGE_INTEGER zero;
+
+    if (count == 0)
+        return 0;
+    if (count > (size_t)INT_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    os_handle = _get_osfhandle(file_fd);
+    if (os_handle == -1) {
+        errno = EBADF;
+        return -1;
+    }
+    file_handle = (HANDLE)os_handle;
+
+    if (iperf_win_resolve_transmitfile(s) < 0)
+        return -1;
+
+    zero.QuadPart = 0;
+    if (!SetFilePointerEx(file_handle, zero, NULL, FILE_BEGIN)) {
+        iperf_win32_set_errno_from_win32(GetLastError());
+        return -1;
+    }
+
+    if (!g_transmit_file(s,
+                         file_handle,
+                         (DWORD)count,
+                         0,
+                         NULL,
+                         NULL,
+                         0)) {
+        iperf_win32_set_errno_from_wsa(WSAGetLastError());
+        return -1;
+    }
+
+    return (int)count;
 }
 

@@ -299,15 +299,17 @@ get_optional_features(void)
     numfeatures++;
 #endif /* HAVE_TCP_CONGESTION */
 
-#if defined(HAVE_SENDFILE)
-    if (numfeatures > 0) {
-	strncat(features, ", ",
-		sizeof(features) - strlen(features) - 1);
+#if defined(HAVE_SENDFILE) || defined(_WIN32)
+    if (iperf_has_zerocopy()) {
+        if (numfeatures > 0) {
+	    strncat(features, ", ",
+		    sizeof(features) - strlen(features) - 1);
+        }
+        strncat(features, "sendfile / zerocopy",
+	    sizeof(features) - strlen(features) - 1);
+        numfeatures++;
     }
-    strncat(features, "sendfile / zerocopy",
-	sizeof(features) - strlen(features) - 1);
-    numfeatures++;
-#endif /* HAVE_SENDFILE */
+#endif /* HAVE_SENDFILE || _WIN32 */
 
 #if defined(HAVE_SO_MAX_PACING_RATE)
     if (numfeatures > 0) {
